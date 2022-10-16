@@ -1,7 +1,10 @@
 .SILENT:
 
-run:
-	go run cmd/main.go
+clidt:
+	go run cmd/clientDataTransfer/main.go
+
+servdt:
+	go run cmd/serverDataTransfer/main.go
 
 test:
 	go test ./... -v
