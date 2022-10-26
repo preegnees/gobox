@@ -1,9 +1,17 @@
 package watcher
 
-// пакет не готов!
+/*
+	Пакет переписан в новой ветке. 
+	Чтобы понять был ли переименовывание,
+нужно будет сравнить хеши в базе, с только что созданным, файлом или папкой!
+
+	Не тестировались новые изменения!
+*/
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -17,44 +25,52 @@ var (
 	IGNORE_STRS = []string{"~", "__gobox__"}
 )
 
+// Info. Inforamtion about event
 type Info struct {
-	Action   fsnotify.Op
-	Path     string
+	Action fsnotify.Op
+	Path   string
 }
 
+// DirWatcher. ...
 type DirWatcher struct {
-	watcher   *fsnotify.Watcher
-	log       *logrus.Logger
-	parentDir string
-	ReaderCh  chan Info
-	ErrCh     chan error
-	ctx       context.Context
+	ctx      context.Context
+	log      *logrus.Logger
+	watcher  *fsnotify.Watcher
+	dir      string
+	EventsCh chan Info
+	ErrCh    chan error
 }
 
-func New(ctx context.Context, log *logrus.Logger, parentDir string) (*DirWatcher, error) {
+// New. New watcher
+func New(ctx context.Context, log *logrus.Logger, dir string) (*DirWatcher, error) {
 
-	w, err := fsnotify.NewWatcher()
+	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		return nil, err
+		return nil, err // err of fsnotify
 	}
 
-	_, err = os.Stat(parentDir)
+	f, err := os.Stat(dir)
 	if err != nil {
-		return nil, err
+		return nil, err // is not exists or anything
 	}
 
-	log.Println("watcher initialized")
+	if !f.IsDir() {
+		return nil, errors.New(fmt.Sprintf("path: %s is not dir", dir))
+	}
+
+	log.Println("watcher creating")
 
 	return &DirWatcher{
-		watcher:   w,
-		log:       log,
-		parentDir: parentDir,
-		ReaderCh:  make(chan Info),
-		ErrCh:     make(chan error),
-		ctx:       ctx,
+		ctx:      ctx,
+		watcher:  watcher,
+		log:      log,
+		dir:      dir,
+		EventsCh: make(chan Info),
+		ErrCh:    make(chan error),
 	}, nil
 }
 
+// Run. Async Run watcher
 func (d *DirWatcher) Run() {
 
 	go func() {
@@ -62,21 +78,41 @@ func (d *DirWatcher) Run() {
 	}()
 }
 
+// start. start watcher
 func (d *DirWatcher) start() {
 
 	defer d.watcher.Close()
 
-	d.add(d.parentDir)
-	d.onStart(d.parentDir)
+	d.add(d.dir)
+	d.onStart(d.dir)
+
+	sendErr := func(err error) {
+		d.log.Error(fmt.Errorf("[watcher]. %w", err))
+		d.ErrCh <- err
+	}
+
+	sendLogDebug := func(message string) {
+		d.log.Debug(fmt.Sprintf("[watcher]. %s", message))
+	}
 
 	for {
 		select {
 		case <-d.ctx.Done():
-
+		
+			go sendErr(fmt.Errorf("context done"))
+			return
+		case err, ok := <-d.watcher.Errors:
+			
+			if !ok {
+				go sendErr(fmt.Errorf("chan fsnotify errors closed"))
+				return
+			}
+			go sendErr(fmt.Errorf("fsnotify error: %w", err))
 			return
 		case event, ok := <-d.watcher.Events:
-
+		
 			if !ok {
+				go sendErr(errors.New("chan fsnotify closed"))
 				return
 			}
 
@@ -88,110 +124,120 @@ func (d *DirWatcher) start() {
 			}
 
 			if pass {
+				sendLogDebug(fmt.Sprintf("path include IGNORE_STRS, path: %s", event.Name))
 				continue
 			}
 
 			if event.Has(fsnotify.Write) {
-				d.log.Debug("write:", event.Name)
+				sendLogDebug(fmt.Sprintf("write to file: %s", event.Name))
 				d.sendChange(event)
 			}
 
 			if event.Has(fsnotify.Remove) {
-				d.log.Debug("remove:", event.Name)
+				sendLogDebug(fmt.Sprintf("remove file: %s", event.Name))
 				d.sendChange(event)
-				if d.isFolder(event.Name) {
-					d.remove(event.Name)
-				}
-			}
-
-			if event.Has(fsnotify.Rename) {
-				d.log.Debug("rename:", event.Name)
-				d.sendChange(event)
-				if d.isFolder(event.Name) {
-					d.remove(event.Name)
+				
+				isFolder, err := d.isFolder(event.Name) 
+				if err != nil {
+					go sendErr(err)
+				}	
+				if isFolder {
+					if err = d.remove(event.Name); err != nil {
+						go sendErr(err)
+					}
 				}
 			}
 
 			if event.Has(fsnotify.Create) {
-				d.log.Debug("create:", event.Name)
+				sendLogDebug(fmt.Sprintf("create file: %s", event.Name))
 				d.sendChange(event)
-				if d.isFolder(event.Name) {
-					d.add(event.Name)
+				
+				isFolder, err := d.isFolder(event.Name) 
+				if err != nil {
+					go sendErr(err)
+				}	
+				if isFolder {
+					if err = d.add(event.Name); err != nil {
+						go sendErr(err)
+					}
 				}
 			}
-
-		case err, ok := <-d.watcher.Errors:
-
-			if !ok {
-				return
-			}
-			d.sendErr(err)
 		}
 	}
 }
 
-func (d *DirWatcher) add(path string) {
+// add. add path to whatcher pull for monitoring
+func (d *DirWatcher) add(path string) error {
 
-	d.log.Debug("add():", path)
+	d.log.Debug("[watcher] add():", path)
 
-	err := d.watcher.Add(path)
-	d.sendErr(err)
+	if err := d.watcher.Add(path); err != nil {
+		return err
+	}
+	return nil
 }
 
-func (d *DirWatcher) remove(path string) {
+// remove. remove folder from watcher
+func (d *DirWatcher) remove(path string) error {
 
-	d.log.Debug("remove():", path)
+	d.log.Debug("[watcher] remove():", path)
 
-	err := d.watcher.Remove(path)
-	d.sendErr(err)
+	if err := d.watcher.Remove(path); err != nil {
+		return nil
+	}
+	return nil
 }
 
-func (d *DirWatcher) isFolder(path string) bool {
+// isFolder. check folder
+func (d *DirWatcher) isFolder(path string) (bool, error) {
 
-	d.log.Debug("isFolder():", path)
+	d.log.Debug("[watcher] isFolder():", path)
 
 	fileInfo, err := os.Stat(path)
-	if d.sendErr(err) {
-		return false
+	if err != nil {
+		return false, err
 	}
 
-	return fileInfo.IsDir()
+	return fileInfo.IsDir(), nil
 }
 
-func (d *DirWatcher) onStart(path string) {
+// onStart. initing
+func (d *DirWatcher) onStart(path string) error {
 
-	d.log.Debug("onStart():", path)
+	d.log.Debug("[watcher] onStart():", path)
 
 	files, err := ioutil.ReadDir(path)
-	d.sendErr(err)
+	if err != nil {
+		return err
+	}
 
 	for _, v := range files {
 		curPath := filepath.Join(path, v.Name())
-		if d.isFolder(curPath) {
-			d.add(curPath)
-			d.onStart(curPath)
+
+		isFolder, err := d.isFolder(curPath)
+		if err != nil {
+			return err
+		}
+
+		if isFolder {
+			if err := d.add(curPath); err != nil {
+				return err
+			}
+			if err := d.onStart(curPath); err != nil {
+				return err
+			}
 		}
 	}
-	d.log.Debug("onStart() allFolders:", d.watcher.WatchList())
-}
-
-func (d *DirWatcher) sendErr(err error) bool {
-
-	if err != nil {
-		d.log.Println("sendErr():", err)
-		go func() {
-			d.ErrCh <- err
-		}()
-		return true
-	}
-	return false
+	d.log.Debug("[watcher] onStart() allFolders:", d.watcher.WatchList())
+	return nil
 }
 
 func (d *DirWatcher) sendChange(event fsnotify.Event) {
 
 	newEvent := Info{
-		Action:   event.Op,
-		Path:     event.Name,
+		Action: event.Op,
+		Path:   event.Name,
 	}
-	d.ReaderCh <- newEvent
+
+	d.EventsCh <- newEvent
 }
