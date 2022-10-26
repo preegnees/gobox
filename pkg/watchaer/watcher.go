@@ -20,7 +20,6 @@ var (
 type Info struct {
 	Action   fsnotify.Op
 	Path     string
-	IsFolder bool
 }
 
 type DirWatcher struct {
@@ -193,7 +192,6 @@ func (d *DirWatcher) sendChange(event fsnotify.Event) {
 	newEvent := Info{
 		Action:   event.Op,
 		Path:     event.Name,
-		IsFolder: d.isFolder(event.Name),
 	}
 	d.ReaderCh <- newEvent
 }
