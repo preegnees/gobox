@@ -39,6 +39,7 @@ type Info struct {
 // DirWatcher. ...
 type DirWatcher struct {
 	ctx      context.Context
+	cancel   context.CancelFunc
 	log      *logrus.Logger
 	watcher  *fsnotify.Watcher
 	dir      string
@@ -63,10 +64,13 @@ func New(ctx context.Context, log *logrus.Logger, dir string) (*DirWatcher, erro
 		return nil, errors.New(fmt.Sprintf("path: %s is not dir", dir))
 	}
 
+	ctxw, cancel := context.WithCancel(ctx)
+
 	log.Println("watcher creating")
 
 	return &DirWatcher{
-		ctx:      ctx,
+		ctx:      ctxw,
+		cancel:   cancel,
 		watcher:  watcher,
 		log:      log,
 		dir:      dir,
@@ -81,6 +85,11 @@ func (d *DirWatcher) Run() {
 	go func() {
 		d.start()
 	}()
+}
+
+// Stop. Shutdown watcher
+func (d *DirWatcher) Stop() {
+	d.cancel()
 }
 
 // start. start watcher
