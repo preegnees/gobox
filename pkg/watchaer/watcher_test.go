@@ -3,8 +3,6 @@ package watcher
 import (
 	"context"
 	"os"
-	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -14,17 +12,23 @@ import (
 
 const PATH = "TestDir"
 
-var ch = make(chan Info, 0)
-var ctx context.Context
-
 func TestMain(t *testing.M) {
 
-	os.MkdirAll(PATH, 0777)
-	defer os.RemoveAll(PATH)
+	if err := os.MkdirAll(PATH, 0777); err != nil {
+		panic(err)
+	}
 
+	// defer func() {
+	// 	err := os.RemoveAll(PATH)
+	// 	fmt.Println("hello")
+	// 	if err != nil {
+	// 		panic(err)
+	// 	}
+	// }()
 
 	var ctx, cancel = context.WithTimeout(context.TODO(), 5*time.Second)
 	defer cancel()
+
 	logger := logrus.New()
 	logger.SetLevel(logrus.DebugLevel)
 	dw, err := New(ctx, logger, PATH)
@@ -33,11 +37,16 @@ func TestMain(t *testing.M) {
 	}
 
 	dw.Run()
-
 	exitVal := t.Run()
+	
+	dw.Stop()
+
+	err = os.RemoveAll(PATH)
+	if err != nil {
+		panic(err)
+	}
 
 	os.Exit(exitVal)
-
 }
 
 func TestOpenTestDir(t *testing.T) {
@@ -47,42 +56,4 @@ func TestOpenTestDir(t *testing.T) {
 		t.Error(err)
 	}
 	defer f.Close()
-}
-
-func TestCreateNewFile(t *testing.T) {
-
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		select {
-		case <-ctx.Done():
-			wg.Done()
-			return
-		case val, ok := <-ch:
-			if !ok {
-				wg.Done()
-				return
-			}
-			t.Log(val)
-			wg.Done()
-			// if val.Action.Has(fsnotify.Create) {
-			// 	t.Log(val.Path)
-			// 	wg.Done()
-			// 	return
-			// } else {
-			// 	wg.Done()
-			// 	t.Error(val.Action)
-			// }
-		}
-	}()
-
-	f, err := os.Create(filepath.Join(PATH, "newFile.txt"))
-	if err != nil {
-		t.Error(err)
-	}
-	defer f.Close()
-
-	wg.Wait()
-	// f.WriteString("test")
 }
