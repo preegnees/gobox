@@ -25,6 +25,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	utils "github.com/preegnees/gobox/pkg/fileWorker/utils"
+	protocol"github.com/preegnees/gobox/pkg/fileWorker/protocol"
 )
 
 // ConfWatcher. ...
@@ -42,7 +43,7 @@ type DirWatcher struct {
 	log      *logrus.Logger
 	watcher  *fsnotify.Watcher
 	dir      string
-	EventCh  chan utils.Info
+	EventCh  chan protocol.Info
 	printErr func(string, string, error) error
 }
 
@@ -84,7 +85,7 @@ func New(cnf ConfWatcher) (*DirWatcher, error) {
 		watcher:  watcher,
 		log:      cnf.Log,
 		dir:      cnf.Dir,
-		EventCh:  make(chan utils.Info),
+		EventCh:  make(chan protocol.Info),
 		printErr: printE,
 	}, nil
 }
@@ -147,7 +148,7 @@ func (d *DirWatcher) Run() error {
 					return err
 				}
 
-				isFolder, err := utils.IsFolder(d.printErr, *d.log, event.Name)
+				isFolder, err := utils.IsFolder(d.printErr, d.log, event.Name)
 				if err != nil {
 					return d.printErr("", "", err)
 				}
@@ -164,7 +165,7 @@ func (d *DirWatcher) Run() error {
 					return err
 				}
 
-				isFolder, err := utils.IsFolder(d.printErr, *d.log, event.Name)
+				isFolder, err := utils.IsFolder(d.printErr, d.log, event.Name)
 				if err != nil {
 					return d.printErr("", "", err)
 				}
@@ -213,7 +214,7 @@ func (d *DirWatcher) onStart(path string) error {
 	for _, v := range files {
 		curPath := filepath.Join(path, v.Name())
 
-		isFolder, err := utils.IsFolder(d.printErr, *d.log, curPath)
+		isFolder, err := utils.IsFolder(d.printErr, d.log, curPath)
 		if err != nil {
 			return d.printErr("", "", err)
 		}
@@ -239,10 +240,13 @@ func (d *DirWatcher) sendChange(event fsnotify.Event) error {
 		return err
 	}
 
-	newEvent := utils.Info{
+	hash, err := utils.GetHash(d.printErr, d.log, event.Name)
+
+	newEvent := protocol.Info{
 		Action:  event.Op,
 		Path:    event.Name,
 		ModTime: modTime,
+		Hash:    hash,
 	}
 
 	done := make(chan struct{})
