@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/sirupsen/logrus"
+	"github.com/fsnotify/fsnotify"
 )
 
 func GetModTime(printErr func (string, string, error) error, path string) (int64, error) {
@@ -28,3 +29,24 @@ func IsFolder(printErr func (string, string, error) error, log logrus.Logger, pa
 
 	return fileInfo.IsDir(), nil
 }
+
+type IClient interface {
+	Send(Info) error
+}
+
+var (
+	IGNORE_STRS = []string{"~", "__gobox__"}
+)
+
+// Info. Inforamtion about event
+type Info struct {
+	Action  fsnotify.Op
+	Path    string
+	ModTime int64
+}
+
+func (i *Info) ToString() string {
+	return fmt.Sprintf("Action: %v; Path: %s; ModTime: %d;", i.Action, i.Path, i.ModTime)
+}
+
+const PATH = "TestDir"
