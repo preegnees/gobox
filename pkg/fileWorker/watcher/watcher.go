@@ -185,7 +185,7 @@ func (d *DirWatcher) add(path string) error {
 	d.log.Debug(fmt.Sprintf("[watcher] add(): %s", path))
 
 	if err := d.watcher.Add(path); err != nil {
-		d.printErr("add(), path", path, err)
+		return d.printErr("add(), path", path, err)
 	}
 	return nil
 }
