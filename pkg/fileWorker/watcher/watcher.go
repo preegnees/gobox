@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/sirupsen/logrus"
@@ -26,11 +27,12 @@ import (
 	utils "github.com/preegnees/gobox/pkg/fileWorker/utils"
 )
 
+// ConfWatcher. ...
 type ConfWatcher struct {
-	Ctx          context.Context
-	Log          *logrus.Logger
-	Dir          string
-	PrintErrFunc func(string, string, error) error
+	Ctx      context.Context
+	Log      *logrus.Logger
+	Dir      string
+	PrintErr func(desc string, arg string, err error) error
 }
 
 // DirWatcher. ...
@@ -40,51 +42,49 @@ type DirWatcher struct {
 	log      *logrus.Logger
 	watcher  *fsnotify.Watcher
 	dir      string
-	EventsCh chan utils.Info
+	EventCh  chan utils.Info
 	printErr func(string, string, error) error
 }
 
-// New. New watcher
+// New. Crete new watcher
 func New(cnf ConfWatcher) (*DirWatcher, error) {
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		return nil, err // err of fsnotify
+		return nil, err
 	}
 
 	f, err := os.Stat(cnf.Dir)
 	if err != nil {
-		return nil, err // is not exists or anything
+		return nil, err
 	}
 
 	if !f.IsDir() {
 		return nil, errors.New(fmt.Sprintf("path: %s is not dir", cnf.Dir))
 	}
 
-	printErrDefault := func(description string, arg string, err error) error {
-		e := fmt.Errorf("[watcher] (err: %w) %s: %s", err, description, arg)
-		cnf.Log.Error(e)
-		return e
-	}
-
 	var printE func(string, string, error) error
-	if cnf.PrintErrFunc == nil {
-		printE = printErrDefault
+	if cnf.PrintErr == nil {
+		printE = func(description string, arg string, err error) error {
+			e := fmt.Errorf("[watcher] (err: %w) %s: %s", err, description, arg)
+			cnf.Log.Error(e)
+			return e
+		}
 	} else {
-		printE = cnf.PrintErrFunc
+		printE = cnf.PrintErr
 	}
 
-	ctxw, cancel := context.WithCancel(cnf.Ctx)
+	ctxwrap, cancel := context.WithCancel(cnf.Ctx)
 
 	cnf.Log.Println("watcher creating")
 
 	return &DirWatcher{
-		ctx:      ctxw,
+		ctx:      ctxwrap,
 		cancel:   cancel,
 		watcher:  watcher,
 		log:      cnf.Log,
 		dir:      cnf.Dir,
-		EventsCh: make(chan utils.Info),
+		EventCh:  make(chan utils.Info),
 		printErr: printE,
 	}, nil
 }
@@ -93,6 +93,7 @@ func New(cnf ConfWatcher) (*DirWatcher, error) {
 func (d *DirWatcher) Run() error {
 
 	defer d.watcher.Close()
+	defer d.cancel()
 
 	if err := d.add(d.dir); err != nil {
 		return err
@@ -135,12 +136,16 @@ func (d *DirWatcher) Run() error {
 
 			if event.Has(fsnotify.Write) {
 				d.log.Debug(fmt.Sprintf("[watcher] write to file: %s", event.Name))
-				d.sendChange(event)
+				if err := d.sendChange(event); err != nil {
+					return err
+				}
 			}
 
 			if event.Has(fsnotify.Remove) {
 				d.log.Debug(fmt.Sprintf("[watcher] remove file: %s", event.Name))
-				d.sendChange(event)
+				if err := d.sendChange(event); err != nil {
+					return err
+				}
 
 				isFolder, err := utils.IsFolder(d.printErr, *d.log, event.Name)
 				if err != nil {
@@ -155,7 +160,9 @@ func (d *DirWatcher) Run() error {
 
 			if event.Has(fsnotify.Create) {
 				d.log.Debug(fmt.Sprintf("[watcher] create file: %s", event.Name))
-				d.sendChange(event)
+				if err := d.sendChange(event); err != nil {
+					return err
+				}
 
 				isFolder, err := utils.IsFolder(d.printErr, *d.log, event.Name)
 				if err != nil {
@@ -206,7 +213,7 @@ func (d *DirWatcher) onStart(path string) error {
 	for _, v := range files {
 		curPath := filepath.Join(path, v.Name())
 
-		isFolder, err := utils.IsFolder(d.printErr,*d.log, curPath)
+		isFolder, err := utils.IsFolder(d.printErr, *d.log, curPath)
 		if err != nil {
 			return d.printErr("", "", err)
 		}
@@ -224,6 +231,7 @@ func (d *DirWatcher) onStart(path string) error {
 	return nil
 }
 
+// sendChange. sending new change (write, remove, create)
 func (d *DirWatcher) sendChange(event fsnotify.Event) error {
 
 	modTime, err := utils.GetModTime(d.printErr, event.Name)
@@ -237,6 +245,20 @@ func (d *DirWatcher) sendChange(event fsnotify.Event) error {
 		ModTime: modTime,
 	}
 
-	d.EventsCh <- newEvent
+	done := make(chan struct{})
+
+	go func() {
+		d.EventCh <- newEvent
+		done <- struct{}{}
+	}()
+
+	select {
+	case <-time.After(2 * time.Second):
+		return d.printErr("sendChange() err over timeout", newEvent.Path, nil)
+	case <-done:
+		close(done)
+		done = nil
+	}
+
 	return nil
 }
