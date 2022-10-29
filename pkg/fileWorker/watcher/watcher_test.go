@@ -38,7 +38,7 @@ func TestMain(t *testing.M) {
 	dw.Run()
 	exitVal := t.Run()
 
-	dw.Stop()
+	cancel()
 
 	err = os.RemoveAll(PATH)
 	if err != nil {
