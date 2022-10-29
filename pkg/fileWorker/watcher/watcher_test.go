@@ -27,7 +27,7 @@ func TestMain(t *testing.M) {
 		Ctx:          ctx,
 		Log:          logger,
 		Dir:          PATH,
-		PrintErrFunc: nil,
+		PrintErr: nil,
 	}
 
 	dw, err := New(cnf)
