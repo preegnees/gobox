@@ -24,9 +24,14 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/sirupsen/logrus"
 
+	protocol "github.com/preegnees/gobox/pkg/fileWorker/protocol"
+	uploader "github.com/preegnees/gobox/pkg/fileWorker/uploader"
 	utils "github.com/preegnees/gobox/pkg/fileWorker/utils"
-	protocol"github.com/preegnees/gobox/pkg/fileWorker/protocol"
 )
+
+type IWatcher interface {
+	Run() error
+}
 
 // ConfWatcher. ...
 type ConfWatcher struct {
@@ -34,6 +39,7 @@ type ConfWatcher struct {
 	Log      *logrus.Logger
 	Dir      string
 	PrintErr func(desc string, arg string, err error) error
+	Client   uploader.IClient
 }
 
 // DirWatcher. ...
@@ -43,7 +49,7 @@ type DirWatcher struct {
 	log      *logrus.Logger
 	watcher  *fsnotify.Watcher
 	dir      string
-	EventCh  chan protocol.Info
+	client   uploader.IClient
 	printErr func(string, string, error) error
 }
 
@@ -85,7 +91,7 @@ func New(cnf ConfWatcher) (*DirWatcher, error) {
 		watcher:  watcher,
 		log:      cnf.Log,
 		dir:      cnf.Dir,
-		EventCh:  make(chan protocol.Info),
+		client:   cnf.Client,
 		printErr: printE,
 	}, nil
 }
@@ -252,7 +258,7 @@ func (d *DirWatcher) sendChange(event fsnotify.Event) error {
 	done := make(chan struct{})
 
 	go func() {
-		d.EventCh <- newEvent
+		d.client.Send(newEvent)
 		done <- struct{}{}
 	}()
 
