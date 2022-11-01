@@ -1,16 +1,5 @@
 package watcher
 
-/*
-	Пакет переписан в новой ветке.
-	Чтобы понять был ли переименовывание,
-нужно будет сравнить хеши в базе, с только что созданным, файлом или папкой!
-
-	Не тестировались новые изменения!
-
-	При старте программы нужно получить структуру файловой директории и сравнии ее с базой данных,
-скорее всего данный пакет не будет этим заниматься.
-*/
-
 import (
 	"context"
 	"errors"
@@ -19,262 +8,313 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/sync/errgroup"
 
-	protocol "github.com/preegnees/gobox/pkg/fileWorker/protocol"
-	utils "github.com/preegnees/gobox/pkg/fileWorker/utils"
+	p "github.com/preegnees/gobox/pkg/fileWorker/protocol"
+	u "github.com/preegnees/gobox/pkg/fileWorker/utils"
+)
+
+var (
+	ERROR__IOUTIL_READDIR_METHOD__ = errors.New("Err ioutil.ReadDir")
+	ERROR__WATCHER_ERRORS_METHOD__ = errors.New("Err watcher.Errors")
+	ERROR__NEW_WATCHER_METHOD__    = errors.New("Err fsnotify.NewWatcher")
+	ERROR__OS_STAT_METHOD__        = errors.New("Err os.Stat cnf.Dir")
+	ERROR__IS_NOT_DIR__            = errors.New("is not dir")
 )
 
 var _ IWatcher = (*Watcher)(nil)
 
+// IWatcher. интерфейс для взаимодействия с пакетом
 type IWatcher interface {
 	Watch() error
-	GetEventChan() chan protocol.Info
+	GetEventChan() chan p.Info
 }
 
-// ConfWatcher. ...
+// ConfWatcher. Конфигурация для мониторинга
 type ConfWatcher struct {
-	Ctx      context.Context
-	Log      *logrus.Logger
-	Dir      string
-	PrintErr func(desc string, arg string, err error) error
+	Ctx context.Context
+	Log *logrus.Logger
+	Dir string
 }
 
-// DirWatcher. ...
+func (c *ConfWatcher) ToString() string {
+
+	return fmt.Sprintf(
+		"context: %v, levelLog: %s, dir: %s",
+		c.Ctx, c.Log.Level, c.Dir,
+	)
+}
+
+// DirWatcher. Структура наблюдателя
 type Watcher struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	log      *logrus.Logger
-	watcher  *fsnotify.Watcher
-	dir      string
-	EventCh  chan protocol.Info
-	printErr func(string, string, error) error
+	ctx     context.Context
+	cancel  context.CancelFunc
+	log     *logrus.Logger
+	watcher *fsnotify.Watcher
+	dir     string
+	EventCh chan p.Info
 }
 
-// New. Crete new watcher
+func (w *Watcher) ToString() string {
+
+	return fmt.Sprintf(
+		"context: %v, levelLog: %s, dir: %s, fsnotify.Watcher: %v, eventCh: %v",
+		w.ctx, w.log.Level, w.dir, w.watcher, w.EventCh,
+	)
+}
+
+// New. создает новый наблюдатель
 func New(cnf ConfWatcher) (*Watcher, error) {
+
+	cnf.Log.Debug(fmt.Sprintf("[watcher.New()] struct cnf: %v;", cnf.ToString()))
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		return nil, err
+		cnf.Log.Error(fmt.Errorf("[watcher.New()] New Watcher fsnotify error, err: %w;", err))
+		return nil, fmt.Errorf("%w (%s);", ERROR__NEW_WATCHER_METHOD__, err.Error())
 	}
 
 	f, err := os.Stat(cnf.Dir)
 	if err != nil {
-		return nil, err
+		cnf.Log.Error(fmt.Errorf("[watcher.New()] stat error, err: %w, path: %s;", err, cnf.Dir))
+		return nil, fmt.Errorf("%w (%s);", ERROR__OS_STAT_METHOD__, err.Error())
 	}
 
 	if !f.IsDir() {
-		return nil, errors.New(fmt.Sprintf("path: %s is not dir", cnf.Dir))
-	}
-
-	var printE func(string, string, error) error
-	if cnf.PrintErr == nil {
-		printE = func(description string, arg string, err error) error {
-			e := fmt.Errorf("[watcher] (err: %w) %s: %s", err, description, arg)
-			cnf.Log.Error(e)
-			return e
-		}
-	} else {
-		printE = cnf.PrintErr
+		cnf.Log.Error(fmt.Errorf("[watcher.New()] path: %s is not dir", cnf.Dir))
+		return nil, fmt.Errorf("%w;", ERROR__IS_NOT_DIR__)
 	}
 
 	ctxwrap, cancel := context.WithCancel(cnf.Ctx)
 
-	cnf.Log.Println("watcher creating")
+	cnf.Log.Debug("[watcher.New()] watcher creating;")
 
 	return &Watcher{
-		ctx:      ctxwrap,
-		cancel:   cancel,
-		watcher:  watcher,
-		log:      cnf.Log,
-		dir:      cnf.Dir,
-		EventCh:  make(chan protocol.Info),
-		printErr: printE,
+		ctx:     ctxwrap,
+		cancel:  cancel,
+		watcher: watcher,
+		log:     cnf.Log,
+		dir:     cnf.Dir,
+		EventCh: make(chan p.Info),
 	}, nil
 }
 
-// Run. Run watcher
-func (d *Watcher) Watch() error {
+// Watch. Запускает мониторинг
+func (w *Watcher) Watch() error {
 
-	defer d.watcher.Close()
-	defer d.cancel()
+	w.log.Debug(fmt.Sprintf("[watcher.Watch()] struct Watch: %v;", w.ToString()))
 
-	if err := d.add(d.dir); err != nil {
-		return err
-	}
+	defer w.watcher.Close()
+	defer w.cancel()
 
-	if err := d.onStart(d.dir); err != nil {
+	w.add(w.dir)
+
+	if err := w.onStart(w.dir); err != nil {
 		return err
 	}
 
 	for {
 		select {
-		case <-d.ctx.Done():
+		case <-w.ctx.Done():
 
-			d.log.Debug("[watcher] context done")
+			w.log.Debug(fmt.Sprintf("[watcher.Watch()] context done;"))
 			return nil
-		case err, ok := <-d.watcher.Errors:
+		case err, ok := <-w.watcher.Errors:
 
 			if !ok {
-				return d.printErr("chan fsnotify errors closed", "", nil)
+				w.log.Error(fmt.Errorf("[watcher.Watch()] chan fsnotify errors closed;"))
+				return nil
 			}
-			d.log.Error(fmt.Errorf("[watcher] fsnotify error: %w", err))
-			return err
-		case event, ok := <-d.watcher.Events:
+
+			w.log.Error(fmt.Errorf("[watcher.Watch()] fsnotify error, err: %w;", err))
+			return fmt.Errorf("%w (%s);", ERROR__WATCHER_ERRORS_METHOD__, err.Error())
+		case event, ok := <-w.watcher.Events:
 
 			if !ok {
-				return d.printErr("chan fsnotify event closed", "", nil)
+				w.log.Error(fmt.Errorf("[watcher.Watch()] chan fsnotify event closed;"))
+				return nil
 			}
+
+			w.log.Debug(fmt.Sprintf("[watcher.Watch()] action %d, event: %s;", event.Op, event.Name))
 
 			pass := false
-			for _, v := range utils.IGNORE_STRS {
-				if strings.Contains(event.Name, v) {
+			for _, val := range u.IGNORE_STRS {
+				if strings.Contains(event.Name, val) {
+					w.log.Debug(fmt.Sprintf("[watcher.Watch()] name: %s include substr: %s;", event.Name, val))
 					pass = true
 				}
 			}
 
 			if pass {
-				d.log.Debug(fmt.Sprintf("[watcher] path include IGNORE_STRS, path: %s", event.Name))
 				continue
 			}
 
+			// Тут может быть задержка, из-за возможных ошибок в u.IsFolder (см.)
 			if event.Has(fsnotify.Write) {
-				d.log.Debug(fmt.Sprintf("[watcher] write to file: %s", event.Name))
-				if err := d.sendChange(event); err != nil {
+				w.log.Debug(fmt.Sprintf("[watcher.Watch()] write to file: %s;", event.Name))
+
+				isFolder, err := u.IsFolder(w.log, event.Name)
+				if err != nil {
 					return err
+				}
+
+				// Это нужно, чтобы не было уведолмления о записи от вышележащих папок
+				// Например: folder1/folder2/file.txt, при изменении file.txt сроботают также folder1 && 2
+				if !isFolder {
+					if err := w.sendChange(event); err != nil {
+						return err
+					}
 				}
 			}
 
 			if event.Has(fsnotify.Remove) {
-				d.log.Debug(fmt.Sprintf("[watcher] remove file: %s", event.Name))
-				if err := d.sendChange(event); err != nil {
+				w.log.Debug(fmt.Sprintf("[watcher.Watch()] remove file: %s;", event.Name))
+
+				if err := w.sendChange(event); err != nil {
 					return err
 				}
-
-				isFolder, err := utils.IsFolder(d.printErr, d.log, event.Name)
-				if err != nil {
-					return d.printErr("", "", err)
-				}
-				if isFolder {
-					if err = d.remove(event.Name); err != nil {
-						return d.printErr("", "", err)
-					}
-				}
+				w.remove(event.Name)
 			}
 
+			// Тут может быть задержка, из-за возможных ошибок в u.IsFolder (см.)
 			if event.Has(fsnotify.Create) {
-				d.log.Debug(fmt.Sprintf("[watcher] create file: %s", event.Name))
-				if err := d.sendChange(event); err != nil {
+				w.log.Debug(fmt.Sprintf("[watcher.Watch()] create file: %s;", event.Name))
+
+				if err := w.sendChange(event); err != nil {
 					return err
 				}
 
-				isFolder, err := utils.IsFolder(d.printErr, d.log, event.Name)
+				isFolder, err := u.IsFolder(w.log, event.Name)
 				if err != nil {
-					return d.printErr("", "", err)
+					return err
 				}
 				if isFolder {
-					if err = d.add(event.Name); err != nil {
-						return d.printErr("", "", err)
-					}
+					w.add(event.Name)
 				}
 			}
 		}
 	}
 }
 
-func (w *Watcher) GetEventChan() chan protocol.Info {
+// GetEventChan. Получение канала для получения событий
+func (w *Watcher) GetEventChan() chan p.Info {
+
+	w.log.Debug(fmt.Sprintf("[watcher.GetEventChan()];"))
 
 	return w.EventCh
 }
 
-// add. add path to whatcher pull for monitoring
-func (d *Watcher) add(path string) error {
+// add. добавляет путь в список наблюдаемых путей. ошибка не возвращется потому что она не важна
+func (w *Watcher) add(path string) {
 
-	d.log.Debug(fmt.Sprintf("[watcher] add(): %s", path))
+	w.log.Debug(fmt.Sprintf("[watcher.add()] path: %s;", path))
 
-	if err := d.watcher.Add(path); err != nil {
-		return d.printErr("add(), path", path, err)
+	if err := w.watcher.Add(path); err != nil {
+		w.log.Error(fmt.Errorf("[watcher.add()] err: %w, path: %s;", err, path))
 	}
-	return nil
 }
 
-// remove. remove folder from watcher
-func (d *Watcher) remove(path string) error {
+// remove. удаляет путь из списка наблюдаемых путей. ошибка не возвращется потому что она не важна
+func (w *Watcher) remove(path string) {
 
-	d.log.Debug(fmt.Sprintf("[watcher] remove(): %s", path))
+	w.log.Debug(fmt.Sprintf("[watcher.remove()] path: %s;", path))
 
-	if err := d.watcher.Remove(path); err != nil {
-		return d.printErr("[watcher] remove(), path", path, err)
+	if err := w.watcher.Remove(path); err != nil {
+		w.log.Error(fmt.Errorf("[watcher.remove()] err: %w, path: %s;", err, path))
 	}
-	return nil
 }
 
-// onStart. initing
-func (d *Watcher) onStart(path string) error {
+// onStart. загружает в паять метаданные файловой системы
+func (w *Watcher) onStart(path string) error {
 
-	d.log.Debug(fmt.Sprintf("[watcher] onStart(): %s", path))
+	w.log.Debug(fmt.Sprintf("[watcher.onStart()] path: %s;", path))
 
 	files, err := ioutil.ReadDir(path)
 	if err != nil {
-		return d.printErr("", "", err)
+		w.log.Error(fmt.Errorf("[watcher.onStart()] err: %w, path: %s;", err, path))
+		return fmt.Errorf("%w (%s);", ERROR__IOUTIL_READDIR_METHOD__, err.Error())
 	}
 
 	for _, v := range files {
 		curPath := filepath.Join(path, v.Name())
-
-		isFolder, err := utils.IsFolder(d.printErr, d.log, curPath)
+		isFolder, err := u.IsFolder(w.log, curPath)
 		if err != nil {
-			return d.printErr("", "", err)
+			return err
 		}
 
 		if isFolder {
-			if err := d.add(curPath); err != nil {
-				return d.printErr("", "", err)
-			}
-			if err := d.onStart(curPath); err != nil {
-				return d.printErr("", "", err)
-			}
+			w.add(curPath)
+			w.onStart(curPath)
 		}
 	}
-	d.log.Debug(fmt.Sprintf("[watcher] onStart() allFolders: %s", d.watcher.WatchList()))
+
+	w.log.Debug(fmt.Sprintf("[watcher] onStart() allFolders: %s", w.watcher.WatchList()))
+
 	return nil
 }
 
-// sendChange. sending new change (write, remove, create)
-func (d *Watcher) sendChange(event fsnotify.Event) error {
+// sendChange. отправляет в канал изменения фаловой системы
+func (w *Watcher) sendChange(event fsnotify.Event) error {
 
-	modTime, err := utils.GetModTime(d.printErr, event.Name)
-	if err != nil {
-		return err
+	w.log.Debug(fmt.Sprintf("[watcher.sendChange()] action: %d, path: %s;", event.Op, event.Name))
+
+	var modTime int64 = 0
+	var hash string = ""
+	var err error = nil
+	var isFolder bool = false
+
+	if !event.Op.Has(fsnotify.Remove) {
+		g := new(errgroup.Group)
+		g.Go(
+			func() error {
+				modTime, err = u.GetModTime(w.log, event.Name)
+				if err != nil {
+					return err
+				}
+				return nil
+			},
+		)
+		g.Go(
+			func() error {
+				hash, err = u.GetHash(w.log, event.Name)
+				if err != nil {
+					return err
+				}
+				return nil
+			},
+		)
+		g.Go(
+			func() error {
+				isFolder, err = u.IsFolder(w.log, event.Name)
+				if err != nil {
+					return err
+				}
+				return nil
+			},
+		)
+		if err := g.Wait(); err != nil {
+			return err
+		}
+	} else {
+		modTime = 0
+		hash = ""
+		isFolder = false
 	}
 
-	hash, err := utils.GetHash(d.printErr, d.log, event.Name)
-
-	newEvent := protocol.Info{
-		Action:  event.Op,
-		Path:    event.Name,
-		ModTime: modTime,
-		Hash:    hash,
+	newEvent := p.Info{
+		Action:   event.Op,
+		Path:     event.Name,
+		ModTime:  modTime,
+		Hash:     hash,
+		IsFolder: isFolder,
 	}
 
-	done := make(chan struct{})
+	w.EventCh <- newEvent
 
-	go func() {
-		d.EventCh <- newEvent
-		done <- struct{}{}
-	}()
-
-	select {
-	case <-time.After(2 * time.Second):
-		return d.printErr("sendChange() err over timeout", newEvent.Path, nil)
-	case <-done:
-		close(done)
-		done = nil
-	}
+	w.log.Debug(fmt.Sprintf("[watcher.sendChange()] sent info: %s;", newEvent.ToString()))
 
 	return nil
 }
