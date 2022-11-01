@@ -17,10 +17,10 @@ import (
 
 var _ IUploader = (*Uploader)(nil)
 
-
 // IUploader. ...
 type IUploader interface {
 	Upload() error
+	GetEventChan() chan protocol.Info
 }
 
 // ConfUploader. ...
@@ -173,4 +173,9 @@ func (u *Uploader) upload(path string) error {
 	}
 
 	return nil
+}
+
+func (u *Uploader) GetEventChan() chan protocol.Info {
+	
+	return u.EventCh
 }

@@ -24,14 +24,15 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/sirupsen/logrus"
 
+	protocol "github.com/preegnees/gobox/pkg/fileWorker/protocol"
 	utils "github.com/preegnees/gobox/pkg/fileWorker/utils"
-	protocol"github.com/preegnees/gobox/pkg/fileWorker/protocol"
 )
 
 var _ IWatcher = (*Watcher)(nil)
 
 type IWatcher interface {
 	Watch() error
+	GetEventChan() chan protocol.Info
 }
 
 // ConfWatcher. ...
@@ -183,6 +184,11 @@ func (d *Watcher) Watch() error {
 			}
 		}
 	}
+}
+
+func (w *Watcher) GetEventChan() chan protocol.Info {
+
+	return w.EventCh
 }
 
 // add. add path to whatcher pull for monitoring
