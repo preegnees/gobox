@@ -28,6 +28,12 @@ import (
 	protocol"github.com/preegnees/gobox/pkg/fileWorker/protocol"
 )
 
+var _ IWatcher = (*Watcher)(nil)
+
+type IWatcher interface {
+	Watch() error
+}
+
 // ConfWatcher. ...
 type ConfWatcher struct {
 	Ctx      context.Context
@@ -91,7 +97,7 @@ func New(cnf ConfWatcher) (*Watcher, error) {
 }
 
 // Run. Run watcher
-func (d *Watcher) Run() error {
+func (d *Watcher) Watch() error {
 
 	defer d.watcher.Close()
 	defer d.cancel()

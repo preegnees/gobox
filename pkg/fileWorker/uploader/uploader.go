@@ -15,6 +15,9 @@ import (
 	utils "github.com/preegnees/gobox/pkg/fileWorker/utils"
 )
 
+var _ IUploader = (*Uploader)(nil)
+
+
 // IUploader. ...
 type IUploader interface {
 	Upload() error

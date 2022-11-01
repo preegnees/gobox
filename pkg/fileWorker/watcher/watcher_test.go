@@ -42,7 +42,7 @@ func TestOpenTestDir(t *testing.T) {
 		panic(err)
 	}
 
-	go dw.Run()
+	go dw.Watch()
 
 	f, err := os.Open(PATH)
 	if err != nil {
@@ -81,7 +81,7 @@ func TestCreateFile(t *testing.T) {
 	}
 
 	go func() {
-		if err := dw.Run(); err != nil {
+		if err := dw.Watch(); err != nil {
 			panic(err)
 		}
 	}()
