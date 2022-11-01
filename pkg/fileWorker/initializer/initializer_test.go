@@ -47,21 +47,22 @@ func TestInitize(t *testing.T) {
 	defer cancel()
 
 	log := logrus.New()
-	log.SetLevel(logrus.DebugLevel)
+	// log.SetLevel(logrus.DebugLevel)
 
 	cnfUploader := u.ConfUploader{
 		Ctx: ctx,
 		Log: log,
 		Dir: PATH,
-		PrintErr: nil,
 	}
-	uploader := u.New(cnfUploader) // сделать так, чтобы возвращал ошибку
+	uploader, err := u.New(cnfUploader)
+	if err != nil {
+		panic(err)
+	}
 
 	cnfWatchar := w.ConfWatcher{
 		Ctx: ctx,
 		Log: log,
 		Dir: PATH,
-		PrintErr: nil,
 	}
 	watcher, err := w.New(cnfWatchar)
 	if err != nil {
