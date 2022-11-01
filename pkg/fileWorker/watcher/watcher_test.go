@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	// "github.com/fsnotify/fsnotify"
 	"github.com/sirupsen/logrus"
 )
 
@@ -34,7 +33,6 @@ func TestOpenTestDir(t *testing.T) {
 		Ctx:      ctx,
 		Log:      logger,
 		Dir:      PATH,
-		PrintErr: nil,
 	}
 
 	dw, err := New(cnf)
@@ -72,7 +70,6 @@ func TestCreateFile(t *testing.T) {
 		Ctx:      ctx,
 		Log:      logger,
 		Dir:      PATH,
-		PrintErr: nil,
 	}
 
 	dw, err := New(cnf)
