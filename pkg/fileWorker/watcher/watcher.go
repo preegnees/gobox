@@ -37,7 +37,7 @@ type ConfWatcher struct {
 }
 
 // DirWatcher. ...
-type DirWatcher struct {
+type Watcher struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	log      *logrus.Logger
@@ -48,7 +48,7 @@ type DirWatcher struct {
 }
 
 // New. Crete new watcher
-func New(cnf ConfWatcher) (*DirWatcher, error) {
+func New(cnf ConfWatcher) (*Watcher, error) {
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -79,7 +79,7 @@ func New(cnf ConfWatcher) (*DirWatcher, error) {
 
 	cnf.Log.Println("watcher creating")
 
-	return &DirWatcher{
+	return &Watcher{
 		ctx:      ctxwrap,
 		cancel:   cancel,
 		watcher:  watcher,
@@ -91,7 +91,7 @@ func New(cnf ConfWatcher) (*DirWatcher, error) {
 }
 
 // Run. Run watcher
-func (d *DirWatcher) Run() error {
+func (d *Watcher) Run() error {
 
 	defer d.watcher.Close()
 	defer d.cancel()
@@ -180,7 +180,7 @@ func (d *DirWatcher) Run() error {
 }
 
 // add. add path to whatcher pull for monitoring
-func (d *DirWatcher) add(path string) error {
+func (d *Watcher) add(path string) error {
 
 	d.log.Debug(fmt.Sprintf("[watcher] add(): %s", path))
 
@@ -191,7 +191,7 @@ func (d *DirWatcher) add(path string) error {
 }
 
 // remove. remove folder from watcher
-func (d *DirWatcher) remove(path string) error {
+func (d *Watcher) remove(path string) error {
 
 	d.log.Debug(fmt.Sprintf("[watcher] remove(): %s", path))
 
@@ -202,7 +202,7 @@ func (d *DirWatcher) remove(path string) error {
 }
 
 // onStart. initing
-func (d *DirWatcher) onStart(path string) error {
+func (d *Watcher) onStart(path string) error {
 
 	d.log.Debug(fmt.Sprintf("[watcher] onStart(): %s", path))
 
@@ -233,7 +233,7 @@ func (d *DirWatcher) onStart(path string) error {
 }
 
 // sendChange. sending new change (write, remove, create)
-func (d *DirWatcher) sendChange(event fsnotify.Event) error {
+func (d *Watcher) sendChange(event fsnotify.Event) error {
 
 	modTime, err := utils.GetModTime(d.printErr, event.Name)
 	if err != nil {
