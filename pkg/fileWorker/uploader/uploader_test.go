@@ -34,25 +34,37 @@ func TestUploadFilesIfDirExists(t *testing.T) {
 	defer os.RemoveAll(PATH)
 
 	logger := logrus.New()
-	// logger.SetLevel(logrus.DebugLevel)
+	logger.SetLevel(logrus.DebugLevel)
 
-	uploader := Uploader{
-		Log: logger,
-		Dir: PATH,
-		Client: cli{
-			Intersepter: func(i protocol.Info) {
-				panic("interseptet is started")
-			},
-		},
-		Ctx: context.TODO(),
+	confUploader := ConfUploader{
+		Log:      logger,
+		Dir:      PATH,
+		Ctx:      context.TODO(),
+		PrintErr: nil,
 	}
 
-	err := uploader.Upload()
-	if err != nil {
-		panic(err)
+	uploader := New(confUploader)
+
+	go func() {
+		err := uploader.Upload()
+		if err != nil {
+			panic(err)
+		}
+	}()
+
+	for {
+		select {
+		case e, ok := <-uploader.EventCh:
+			if !ok {
+				t.Log("chan event uploader closed")
+			}
+			if e.Action == 101 {
+				close(uploader.EventCh)
+				return
+			}
+		}
 	}
 }
-
 
 func TestUploadFilesIfDirExistsAndIntoMoreAnythigFilesAndFolders(t *testing.T) {
 
@@ -86,32 +98,41 @@ func TestUploadFilesIfDirExistsAndIntoMoreAnythigFilesAndFolders(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	uploader := Uploader{
-		Log: logger,
-		Dir: PATH,
-		Client: cli{
-			Intersepter: func(i protocol.Info) {
-				// t.Log(i.Path)
-				for _, f := range files {
-					if f == i.Path {
-						countAll++
-						if i.IsFolder {
-							countFolders++
-						}
-					}
+	confUploader := ConfUploader{
+		Log:      logger,
+		Dir:      PATH,
+		Ctx:      ctx,
+		PrintErr: nil,
+	}
+
+	uploader := New(confUploader)
+
+	go func() {
+		err := uploader.Upload()
+		if err != nil {
+			panic(err)
+		}
+	}()
+
+	for {
+		select {
+		case e, ok := <-uploader.EventCh:
+			if !ok {
+				t.Log("err uploader eventch closed")
+				return
+			}
+			if e.Action == 101 {
+				if countAll != 3 || countFolders != 1 {
+					panic(fmt.Sprintf("countAll:%d || countFolders:%d", countAll, countFolders))
 				}
-			},
-		},
-		Ctx: ctx,
-	}
-
-	err := uploader.Upload()
-	if err != nil {
-		panic(err)
-	}
-
-	if countAll != 3 || countFolders != 1 {
-		panic(fmt.Sprintf("countAll:%d || countFolders:%d", countAll, countFolders))
+				return
+			}
+			t.Log(e.ToString())
+			if e.IsFolder {
+				countFolders++
+			}
+			countAll++
+		}
 	}
 }
 
@@ -145,38 +166,43 @@ func TestUploadCheckDoneCtx(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	uploader := Uploader{
-		Log: logger,
-		Dir: PATH,
-		Client: cli{
-			Intersepter: func(i protocol.Info) {
-				// t.Log(i.Path)
-				for _, f := range files {
-					if f == i.Path {
-						count++
-					}
-				}
-			},
-		},
-		Ctx: ctx,
+	confUploader := ConfUploader{
+		Log:      logger,
+		Dir:      PATH,
+		Ctx:      ctx,
+		PrintErr: nil,
 	}
 
-	done := make(chan struct{})
+	uploader := New(confUploader)
+
 	go func() {
-		<-time.After(50 * time.Millisecond)
-		cancel()
-		done<- struct{}{}
+		err := uploader.Upload()
+		if err != nil {
+			panic(err)
+		}
 	}()
 
-	err := uploader.Upload()
-	if err != nil {
-		panic(err)
-	}
+	go func() {
+		<-time.After(5 * time.Millisecond)
+		cancel()
+	}()
 
-	<- done
-	// t.Log("count: ", count)
-	if count >= limit || count == 0 {
-		panic(fmt.Sprintf("count:%d", count))
+	for {
+		select {
+		case e, ok := <-uploader.EventCh:
+			if !ok {
+				t.Log("err uploader eventch closed")
+				return
+			}
+			if e.Action == 101 {
+				if count >= limit || count == 0 {
+					panic(fmt.Sprintf("count:%d", count))
+				}
+				return
+			}
+			t.Log(e.ToString())
+			count++
+		}
 	}
 }
 

@@ -20,38 +20,73 @@ type IUploader interface {
 	Upload() error
 }
 
-type IClient interface {
-	Send(protocol.Info) error
-}
-
-type Uploader struct {
+// ConfUploader. ...
+type ConfUploader struct {
 	Ctx      context.Context
 	Log      *logrus.Logger
 	Dir      string
-	PrintErr func(string, string, error) error
-	Client   IClient
+	PrintErr func(desc string, arg string, err error) error
+}
+
+// Uploader. ...
+type Uploader struct {
+	ctx      context.Context
+	cancel   context.CancelFunc
+	log      *logrus.Logger
+	dir      string
+	printErr func(string, string, error) error
+	EventCh  chan protocol.Info
+}
+
+func New(cnf ConfUploader) *Uploader {
+
+	ctx, cancel := context.WithCancel(cnf.Ctx)
+
+	var printE func(string, string, error) error
+	if cnf.PrintErr == nil {
+		printE = func(description string, arg string, err error) error {
+			e := fmt.Errorf("[uploader] (err: %w) %s: %s", err, description, arg)
+			cnf.Log.Error(e)
+			return e
+		}
+	} else {
+		printE = cnf.PrintErr
+	}
+
+	cnf.Log.Println("uploader creating")
+
+	return &Uploader{
+		ctx:      ctx,
+		cancel:   cancel,
+		log:      cnf.Log,
+		dir:      cnf.Dir,
+		printErr: printE,
+		EventCh:  make(chan protocol.Info),
+	}
 }
 
 func (u *Uploader) Upload() error {
 
-	f, err := os.Stat(u.Dir)
+	defer u.cancel()
+
+	f, err := os.Stat(u.dir)
 	if err != nil {
 		return err
 	}
 
 	if !f.IsDir() {
-		return errors.New(fmt.Sprintf("path: %s is not dir", u.Dir))
+		return errors.New(fmt.Sprintf("path: %s is not dir", u.dir))
 	}
 
-	if u.PrintErr == nil {
-		u.PrintErr = func(description string, arg string, err error) error {
+	if u.printErr == nil {
+		u.printErr = func(description string, arg string, err error) error {
 			e := fmt.Errorf("[watcher] (err: %w) %s: %s", err, description, arg)
-			u.Log.Error(e)
+			u.log.Error(e)
 			return e
 		}
 	}
 
-	if err := u.upload(u.Dir); err != nil {
+	if err := u.upload(u.dir); err != nil {
 		return err
 	}
 	return nil
@@ -59,17 +94,19 @@ func (u *Uploader) Upload() error {
 
 func (u *Uploader) upload(path string) error {
 
-	u.Log.Debug(fmt.Sprintf("[uploader] upload(): %s", path))
+	u.log.Debug(fmt.Sprintf("[uploader] upload(): %s", path))
 
 	files, err := ioutil.ReadDir(path)
 	if err != nil {
-		return u.PrintErr("[uploader] upload() err", "", err)
+		return u.printErr("[uploader] upload() err", "", err)
 	}
+
+	var mainErr error
 
 	for _, file := range files {
 		select {
-		case <-u.Ctx.Done():
-			return nil
+		case <-u.ctx.Done():
+			break
 		default:
 			curPath := filepath.Join(path, file.Name())
 
@@ -81,23 +118,26 @@ func (u *Uploader) upload(path string) error {
 			}
 
 			if pass {
-				u.Log.Debug(fmt.Sprintf("[uploader] path include IGNORE_STRS, path: %s", curPath))
+				u.log.Debug(fmt.Sprintf("[uploader] path include IGNORE_STRS, path: %s", curPath))
 				continue
 			}
 
-			modTime, err := utils.GetModTime(u.PrintErr, curPath)
+			modTime, err := utils.GetModTime(u.printErr, curPath)
 			if err != nil {
-				return err
+				mainErr = err
+				break
 			}
 
-			hash, err := utils.GetHash(u.PrintErr, u.Log, curPath)
+			hash, err := utils.GetHash(u.printErr, u.log, curPath)
 			if err != nil {
-				return err
+				mainErr = err
+				break
 			}
 
-			isFolder, err := utils.IsFolder(u.PrintErr, u.Log, curPath)
+			isFolder, err := utils.IsFolder(u.printErr, u.log, curPath)
 			if err != nil {
-				return u.PrintErr("[uploader]", "", err)
+				mainErr = u.printErr("[uploader]", "", err)
+				break
 			}
 
 			info := protocol.Info{
@@ -108,18 +148,26 @@ func (u *Uploader) upload(path string) error {
 				IsFolder: isFolder,
 			}
 
-			if err := u.Client.Send(info); err != nil {
-				return u.PrintErr("[uploader] Method Send of Client failed", info.ToString(), err)
-			}
+			u.EventCh <- info
 
-			u.Log.Debug(fmt.Sprintf("[uploader] Sent Info: %s", info.ToString()))
+			u.log.Debug(fmt.Sprintf("[uploader] Sent Info: %s", info.ToString()))
 
 			if isFolder {
 				if err := u.upload(curPath); err != nil {
-					return u.PrintErr("[uploader]", "", err)
+					mainErr = u.printErr("[uploader]", "", err)
+					break
 				}
 			}
 		}
 	}
+
+	u.EventCh <- protocol.Info{
+		Action: (101),
+	}
+
+	if mainErr != nil {
+		return mainErr
+	}
+
 	return nil
 }
