@@ -8,10 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/sync/errgroup"
 
 	p "github.com/preegnees/gobox/pkg/fileWorker/protocol"
 	u "github.com/preegnees/gobox/pkg/fileWorker/utils"
@@ -116,6 +116,26 @@ func (w *Watcher) Watch() error {
 		return err
 	}
 
+	go func() {
+		for {
+			select {
+			case <-w.ctx.Done():
+				return
+			default:
+				time.Sleep(2 * time.Second)
+				_, err := os.Stat(w.dir)
+				if err != nil {
+					w.log.Error(fmt.Errorf("[watcher.Watch()] MAIN DIR REMOVED;"))
+					w.log.Debug(fmt.Sprintf("[watcher.Watch()] CREATE MAIN DIR;"))
+					if err := os.MkdirAll(w.dir, 0777); err != nil {
+						//TODO(send to user and server)
+						w.log.Error(fmt.Errorf("[watcher.Watch()] CANT CREATE NEW MAIN DIR f*ck;"))
+					}
+				}
+			}
+		}
+	}()
+
 	for {
 		select {
 		case <-w.ctx.Done():
@@ -156,26 +176,20 @@ func (w *Watcher) Watch() error {
 			if event.Has(fsnotify.Write) {
 				w.log.Debug(fmt.Sprintf("[watcher.Watch()] write to file: %s;", event.Name))
 
-				isFolder, err := u.IsFolder(w.log, event.Name)
-				if err != nil {
-					return err
-				}
+				isFolder := u.IsFolder(w.log, event.Name)
 
 				// Это нужно, чтобы не было уведолмления о записи от вышележащих папок
 				// Например: folder1/folder2/file.txt, при изменении file.txt сроботают также folder1 && 2
 				if !isFolder {
-					if err := w.sendChange(event); err != nil {
-						return err
-					}
+					w.sendChange(event)
 				}
 			}
 
 			if event.Has(fsnotify.Remove) {
 				w.log.Debug(fmt.Sprintf("[watcher.Watch()] remove file: %s;", event.Name))
 
-				if err := w.sendChange(event); err != nil {
-					return err
-				}
+				w.sendChange(event)
+
 				w.remove(event.Name)
 			}
 
@@ -183,14 +197,9 @@ func (w *Watcher) Watch() error {
 			if event.Has(fsnotify.Create) {
 				w.log.Debug(fmt.Sprintf("[watcher.Watch()] create file: %s;", event.Name))
 
-				if err := w.sendChange(event); err != nil {
-					return err
-				}
+				w.sendChange(event)
 
-				isFolder, err := u.IsFolder(w.log, event.Name)
-				if err != nil {
-					return err
-				}
+				isFolder := u.IsFolder(w.log, event.Name)
 				if isFolder {
 					w.add(event.Name)
 				}
@@ -240,10 +249,7 @@ func (w *Watcher) onStart(path string) error {
 
 	for _, v := range files {
 		curPath := filepath.Join(path, v.Name())
-		isFolder, err := u.IsFolder(w.log, curPath)
-		if err != nil {
-			return err
-		}
+		isFolder := u.IsFolder(w.log, curPath)
 
 		if isFolder {
 			w.add(curPath)
@@ -257,46 +263,21 @@ func (w *Watcher) onStart(path string) error {
 }
 
 // sendChange. отправляет в канал изменения фаловой системы
-func (w *Watcher) sendChange(event fsnotify.Event) error {
+func (w *Watcher) sendChange(event fsnotify.Event) {
 
 	w.log.Debug(fmt.Sprintf("[watcher.sendChange()] action: %d, path: %s;", event.Op, event.Name))
 
 	var modTime int64 = 0
 	var hash string = ""
-	var err error = nil
 	var isFolder bool = false
 
 	if !event.Op.Has(fsnotify.Remove) {
-		g := new(errgroup.Group)
-		g.Go(
-			func() error {
-				modTime, err = u.GetModTime(w.log, event.Name)
-				if err != nil {
-					return err
-				}
-				return nil
-			},
-		)
-		g.Go(
-			func() error {
-				hash, err = u.GetHash(w.log, event.Name)
-				if err != nil {
-					return err
-				}
-				return nil
-			},
-		)
-		g.Go(
-			func() error {
-				isFolder, err = u.IsFolder(w.log, event.Name)
-				if err != nil {
-					return err
-				}
-				return nil
-			},
-		)
-		if err := g.Wait(); err != nil {
-			return err
+		modTime = u.GetModTime(w.log, event.Name)
+		hash = u.GetHash(w.log, event.Name)
+		isFolder = u.IsFolder(w.log, event.Name)
+		if modTime == 0 || hash == "" {
+			w.log.Error(fmt.Errorf("[watcher.sendChange()] err in getModTime or has, action: %d, path: %s;", event.Op, event.Name))
+			return
 		}
 	} else {
 		modTime = 0
@@ -315,6 +296,4 @@ func (w *Watcher) sendChange(event fsnotify.Event) error {
 	w.EventCh <- newEvent
 
 	w.log.Debug(fmt.Sprintf("[watcher.sendChange()] sent info: %s;", newEvent.ToString()))
-
-	return nil
 }
