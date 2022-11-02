@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/sirupsen/logrus"
-	"golang.org/x/sync/errgroup"
 
 	p "github.com/preegnees/gobox/pkg/fileWorker/protocol"
 	ut "github.com/preegnees/gobox/pkg/fileWorker/utils"
@@ -18,8 +17,8 @@ import (
 
 var (
 	ERROR__IOUTIL_READDIR_METHOD__ = errors.New("Err ioutil.ReadDir")
-	ERROR__OS_STAT_METHOD__ = errors.New("Err os.Stat cnf.Dir")
-	ERROR__IS_NOT_DIR__     = errors.New("is not dir")
+	ERROR__OS_STAT_METHOD__        = errors.New("Err os.Stat cnf.Dir")
+	ERROR__IS_NOT_DIR__            = errors.New("is not dir")
 )
 
 var _ IUploader = (*Uploader)(nil)
@@ -121,17 +120,17 @@ func (u *Uploader) upload(path string) error {
 		select {
 		case <-u.ctx.Done():
 
-			u.log.Debug(fmt.Sprintf("[uploader.Watch()] context done;"))
+			u.log.Debug(fmt.Sprintf("[uploader.upload()] context done;"))
 			break
 		default:
 			curPath := filepath.Join(path, file.Name())
 
-			u.log.Debug(fmt.Sprintf("[uploader.Watch()] current path: %s;", curPath))
+			u.log.Debug(fmt.Sprintf("[uploader.upload()] current path: %s;", curPath))
 
 			pass := false
 			for _, val := range ut.IGNORE_STRS {
 				if strings.Contains(curPath, val) {
-					u.log.Debug(fmt.Sprintf("[uploader.Watch()] name: %s include substr: %s;", curPath, val))
+					u.log.Debug(fmt.Sprintf("[uploader.upload()] name: %s include substr: %s;", curPath, val))
 					pass = true
 				}
 			}
@@ -140,42 +139,12 @@ func (u *Uploader) upload(path string) error {
 				continue
 			}
 
-			var modTime int64 = 0
-			var hash string = ""
-			var err error = nil
-			var isFolder bool = false
-
-			g := new(errgroup.Group)
-			g.Go(
-				func() error {
-					modTime, err = ut.GetModTime(u.log, curPath)
-					if err != nil {
-						return err
-					}
-					return nil
-				},
-			)
-			g.Go(
-				func() error {
-					hash, err = ut.GetHash(u.log, curPath)
-					if err != nil {
-						return err
-					}
-					return nil
-				},
-			)
-			g.Go(
-				func() error {
-					isFolder, err = ut.IsFolder(u.log, curPath)
-					if err != nil {
-						return err
-					}
-					return nil
-				},
-			)
-			if err := g.Wait(); err != nil {
-				errr = err
-				break
+			modTime := ut.GetModTime(u.log, curPath)
+			hash := ut.GetHash(u.log, curPath)
+			isFolder := ut.IsFolder(u.log, curPath)
+			if modTime == 0 || hash == "" {
+				u.log.Error(fmt.Errorf("[uploader.upload()] err modTime or Hash (will not send), path: %s", curPath))
+				continue
 			}
 
 			info := p.Info{
@@ -188,7 +157,7 @@ func (u *Uploader) upload(path string) error {
 
 			u.eventCh <- info
 
-			u.log.Debug(fmt.Sprintf("[uploader.Watch()] Sent Info: %s", info.ToString()))
+			u.log.Debug(fmt.Sprintf("[uploader.upload()] Sent Info: %s", info.ToString()))
 
 			if isFolder {
 				if err := u.upload(curPath); err != nil {
