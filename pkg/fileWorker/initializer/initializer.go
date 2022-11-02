@@ -54,10 +54,10 @@ func (i *initializer) Initize() error {
 	}()
 
 	go func() {
-		err := i.cnf.Watcher.Watch()
-		if err != nil {
-			panic(err)
-		}
+			err := i.cnf.Watcher.Watch()
+			if err != nil {
+				panic(err)
+			}
 	}()
 
 	eventChWatcher := i.cnf.Watcher.GetEventChan()
