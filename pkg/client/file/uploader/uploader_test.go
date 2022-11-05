@@ -5,24 +5,32 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/sirupsen/logrus"
 
-	protocol "github.com/preegnees/gobox/pkg/client/file/protocol"
-	"github.com/preegnees/gobox/pkg/client/file/utils"
+	cl "github.com/preegnees/gobox/pkg/client/client"
+	pc "github.com/preegnees/gobox/pkg/client/file/protocol"
+	ut "github.com/preegnees/gobox/pkg/client/file/utils"
 )
 
 const PATH = "TestDir"
 
+var _ cl.IClient = (*cli)(nil)
+
 type cli struct {
-	Intersepter func(protocol.Info)
+	intersepterErr func(int, context.CancelFunc, error)
+	intersepterDev func(pc.Info)
 }
 
-func (c cli) Send(i protocol.Info) error {
-	c.Intersepter(i)
-	return nil
+func (c *cli) SendError(id int, cancel context.CancelFunc, err error) {
+	c.intersepterErr(id, cancel, err)
+}
+
+func (c *cli) SendDeviation(info pc.Info) {
+	c.intersepterDev(info)
 }
 
 func TestUploadFilesIfDirExists(t *testing.T) {
@@ -36,10 +44,22 @@ func TestUploadFilesIfDirExists(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.DebugLevel)
 
+	interErr := func(id int, cancel context.CancelFunc, err error) {
+		t.Log(fmt.Sprintf("id: %d, err: %v", id, err))
+	}
+
+	interDev := func(info pc.Info) {
+		t.Log(fmt.Sprintf("info: %s", info.ToString()))
+	}
+
 	confUploader := ConfUploader{
 		Log: logger,
 		Dir: PATH,
 		Ctx: context.TODO(),
+		Client: &cli{
+			intersepterErr: interErr,
+			intersepterDev: interDev,
+		},
 	}
 
 	uploader, err := New(confUploader)
@@ -47,24 +67,15 @@ func TestUploadFilesIfDirExists(t *testing.T) {
 		panic(err)
 	}
 
+	var wg sync.WaitGroup
+	wg.Add(1)
+
 	go func() {
-		err := uploader.Upload()
-		if err != nil {
-			panic(err)
-		}
+		uploader.Upload()
+		wg.Done()
 	}()
 
-	uploaderCh := uploader.GetEventChan()
-
-	for {
-		select {
-		case _, ok := <-uploaderCh:
-			if !ok {
-				t.Log("chan event uploader closed")
-				return
-			}
-		}
-	}
+	wg.Wait()
 }
 
 func TestUploadFilesIfDirExistsAndIntoMoreAnythigFilesAndFolders(t *testing.T) {
@@ -83,7 +94,7 @@ func TestUploadFilesIfDirExistsAndIntoMoreAnythigFilesAndFolders(t *testing.T) {
 		{filepath.Join(PATH, "test", "file1.exe"): true},
 		{filepath.Join(PATH, "test"): false},
 		{filepath.Join(PATH, "f2.html"): true},
-		{filepath.Join(PATH, fmt.Sprintf("file%s", utils.IGNORE_STRS[0])): true},
+		{filepath.Join(PATH, fmt.Sprintf("file%s", ut.IGNORE_STRS[0])): true},
 	}
 
 	if err := createFile(files); err != nil {
@@ -91,7 +102,7 @@ func TestUploadFilesIfDirExistsAndIntoMoreAnythigFilesAndFolders(t *testing.T) {
 	}
 
 	logger := logrus.New()
-	// logger.SetLevel(logrus.DebugLevel)
+	logger.SetLevel(logrus.DebugLevel)
 
 	countAll := 0
 	countFolders := 0
@@ -99,10 +110,29 @@ func TestUploadFilesIfDirExistsAndIntoMoreAnythigFilesAndFolders(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	interErr := func(id int, cancel context.CancelFunc, err error) {
+		t.Log(fmt.Sprintf("id: %d, err: %v", id, err))
+	}
+
+	interDev := func(info pc.Info) {
+		t.Log(fmt.Sprintf("info: %s", info.ToString()))
+		countAll++
+		if info.IsFolder {
+			countFolders++
+		}
+		if countAll == 3 && countFolders == 1 {
+			cancel()
+		}
+	}
+
 	confUploader := ConfUploader{
 		Log: logger,
 		Dir: PATH,
 		Ctx: ctx,
+		Client: &cli{
+			intersepterErr: interErr,
+			intersepterDev: interDev,
+		},
 	}
 
 	uploader, err := New(confUploader)
@@ -110,32 +140,13 @@ func TestUploadFilesIfDirExistsAndIntoMoreAnythigFilesAndFolders(t *testing.T) {
 		panic(err)
 	}
 
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
-		err := uploader.Upload()
-		if err != nil {
-			panic(err)
-		}
+		uploader.Upload()
+		wg.Done()
 	}()
-
-	uploaderCh := uploader.GetEventChan()
-
-	for {
-		select {
-		case e, ok := <-uploaderCh:
-			if !ok {
-				if countAll != 3 || countFolders != 1 {
-					panic(fmt.Sprintf("countAll:%d || countFolders:%d", countAll, countFolders))
-				}
-				t.Log("err uploader eventch closed")
-				return
-			}
-			t.Log(e.ToString())
-			if e.IsFolder {
-				countFolders++
-			}
-			countAll++
-		}
-	}
+	wg.Wait()
 }
 
 func TestUploadCheckDoneCtx(t *testing.T) {
@@ -161,17 +172,30 @@ func TestUploadCheckDoneCtx(t *testing.T) {
 	}
 
 	logger := logrus.New()
-	// logger.SetLevel(logrus.DebugLevel)
+	logger.SetLevel(logrus.DebugLevel)
 
 	count := 0
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	interErr := func(id int, cancel context.CancelFunc, err error) {
+		t.Log(fmt.Sprintf("id: %d, err: %v", id, err))
+	}
+
+	interDev := func(info pc.Info) {
+		t.Log(fmt.Sprintf("info: %s", info.ToString()))
+		count++
+	}
+
 	confUploader := ConfUploader{
 		Log: logger,
 		Dir: PATH,
 		Ctx: ctx,
+		Client: &cli{
+			intersepterErr: interErr,
+			intersepterDev: interDev,
+		},
 	}
 
 	uploader, err := New(confUploader)
@@ -179,11 +203,12 @@ func TestUploadCheckDoneCtx(t *testing.T) {
 		panic(err)
 	}
 
+	var wg sync.WaitGroup
+	wg.Add(1)
+
 	go func() {
-		err := uploader.Upload()
-		if err != nil {
-			panic(err)
-		}
+		uploader.Upload()
+		wg.Done()
 	}()
 
 	go func() {
@@ -191,33 +216,21 @@ func TestUploadCheckDoneCtx(t *testing.T) {
 		cancel()
 	}()
 
-	uploaderCh := uploader.GetEventChan()
-
-	for {
-		select {
-		case e, ok := <-uploaderCh:
-			if !ok {
-				if count >= limit || count == 0 {
-					panic(fmt.Sprintf("count:%d", count))
-				}
-				t.Log("err uploader eventch closed")
-				return
-			}
-			t.Log(e.ToString())
-			count++
-		}
+	wg.Wait()
+	if count >= limit {
+		panic(fmt.Sprintf("count:%d", count))
 	}
 }
 
 func createFile(fileNames []map[string]bool) error {
 	for _, f := range fileNames {
-		
+
 		for k, v := range f {
 			if v {
 				if err := os.MkdirAll(filepath.Dir(k), 0770); err != nil {
 					return err
 				}
-	
+
 				f, err := os.Create(k)
 				if err != nil {
 					return err

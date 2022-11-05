@@ -2,7 +2,6 @@ package uploader
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -11,29 +10,27 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	p "github.com/preegnees/gobox/pkg/client/file/protocol"
+	cl "github.com/preegnees/gobox/pkg/client/client"
+	pc "github.com/preegnees/gobox/pkg/client/file/protocol"
 	ut "github.com/preegnees/gobox/pkg/client/file/utils"
+	er "github.com/preegnees/gobox/pkg/client/errors"
 )
 
-var (
-	ERROR__IOUTIL_READDIR_METHOD__ = errors.New("Err ioutil.ReadDir")
-	ERROR__OS_STAT_METHOD__        = errors.New("Err os.Stat cnf.Dir")
-	ERROR__IS_NOT_DIR__            = errors.New("is not dir")
-)
+var IDENTIFIER = 2
 
 var _ IUploader = (*Uploader)(nil)
 
 // IUploader. интерфейс для взаимодействия с пакетом
 type IUploader interface {
-	Upload() error
-	GetEventChan() chan p.Info
+	Upload()
 }
 
 // ConfUploader. конфигурация для загрузчика
 type ConfUploader struct {
-	Ctx context.Context
-	Log *logrus.Logger
-	Dir string
+	Ctx    context.Context
+	Log    *logrus.Logger
+	Dir    string
+	Client cl.IClient
 }
 
 func (c *ConfUploader) ToString() string {
@@ -46,18 +43,18 @@ func (c *ConfUploader) ToString() string {
 
 // Uploader. структура загрузчика
 type Uploader struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
-	log     *logrus.Logger
-	dir     string
-	eventCh chan p.Info
+	ctx    context.Context
+	cancel context.CancelFunc
+	log    *logrus.Logger
+	dir    string
+	client cl.IClient
 }
 
 func (u *Uploader) ToString() string {
 
 	return fmt.Sprintf(
-		"context: %v, levelLog: %s, dir: %s, eventCh: %v",
-		u.ctx, u.log.Level, u.dir, u.eventCh,
+		"context: %v, levelLog: %s, dir: %s, client: %v",
+		u.ctx, u.log.Level, u.dir, u.client,
 	)
 }
 
@@ -66,15 +63,21 @@ func New(cnf ConfUploader) (*Uploader, error) {
 
 	cnf.Log.Debug(fmt.Sprintf("[uploader.New()] struct cnf: %v;", cnf.ToString()))
 
+	if cnf.Log == nil {
+		return nil, fmt.Errorf("[watcher.New()] log is nil;")
+	}
+
+	if cnf.Client == nil {
+		return nil, fmt.Errorf("[watcher.New()] client is nil;")
+	}
+
 	f, err := os.Stat(cnf.Dir)
 	if err != nil {
-		cnf.Log.Error(fmt.Errorf("[uploader.New()] stat error, err: %w, path: %s;", err, cnf.Dir))
-		return nil, fmt.Errorf("%w (%s);", ERROR__OS_STAT_METHOD__, err.Error())
+		return nil, fmt.Errorf("[uploader.New()] stat error, err: %w, path: %s;", err, cnf.Dir)
 	}
 
 	if !f.IsDir() {
-		cnf.Log.Error(fmt.Errorf("[uploader.New()] path: %s is not dir", cnf.Dir))
-		return nil, fmt.Errorf("%w;", ERROR__IS_NOT_DIR__)
+		return nil, fmt.Errorf("[uploader.New()] path: %s is not dir", cnf.Dir)
 	}
 
 	ctx, cancel := context.WithCancel(cnf.Ctx)
@@ -82,26 +85,22 @@ func New(cnf ConfUploader) (*Uploader, error) {
 	cnf.Log.Debug("[uploader.New()] uploader creating;")
 
 	return &Uploader{
-		ctx:     ctx,
-		cancel:  cancel,
-		log:     cnf.Log,
-		dir:     cnf.Dir,
-		eventCh: make(chan p.Info),
+		ctx:    ctx,
+		cancel: cancel,
+		log:    cnf.Log,
+		dir:    cnf.Dir,
+		client: cnf.Client,
 	}, nil
 }
 
-func (u *Uploader) Upload() error {
+func (u *Uploader) Upload() {
 
 	defer u.cancel()
 
 	if err := u.upload(u.dir); err != nil {
-		return err
+		u.client.SendError(IDENTIFIER, u.cancel, err)
+		return
 	}
-
-	close(u.eventCh)
-	u.eventCh = nil
-
-	return nil
 }
 
 func (u *Uploader) upload(path string) error {
@@ -110,8 +109,10 @@ func (u *Uploader) upload(path string) error {
 
 	files, err := ioutil.ReadDir(path)
 	if err != nil {
-		u.log.Error(fmt.Errorf("[uploader.onStart()] err: %w, path: %s;", err, path))
-		return fmt.Errorf("%w (%s);", ERROR__IOUTIL_READDIR_METHOD__, err.Error())
+		return fmt.Errorf(
+			"[uploader.upload()] (ioutil.ReadDir) path: %s, err: %v, werr: %w;",
+			path, err, er.ERROR__GET_ALL_FILES_FROM_DIR__,
+		)
 	}
 
 	var errr error
@@ -139,23 +140,22 @@ func (u *Uploader) upload(path string) error {
 				continue
 			}
 
-			modTime := ut.GetModTime(u.log, curPath)
-			hash := ut.GetHash(u.log, curPath)
-			isFolder := ut.IsFolder(u.log, curPath)
-			if modTime == 0 || hash == "" {
-				u.log.Error(fmt.Errorf("[uploader.upload()] err modTime or Hash (will not send), path: %s", curPath))
-				continue
+			modTime, err := ut.GetModTime(u.log, curPath)
+			hash, err := ut.GetHash(u.log, curPath)
+			isFolder, err := ut.IsFolder(u.log, curPath)
+			if err != nil {
+				u.client.SendError(IDENTIFIER, u.cancel, err)
 			}
 
-			info := p.Info{
-				Action:   p.UPLOAD_CODE,
+			info := pc.Info{
+				Action:   pc.UPLOAD_CODE,
 				Path:     curPath,
 				ModTime:  modTime,
 				Hash:     hash,
 				IsFolder: isFolder,
 			}
 
-			u.eventCh <- info
+			u.client.SendDeviation(info)
 
 			u.log.Debug(fmt.Sprintf("[uploader.upload()] Sent Info: %s", info.ToString()))
 
@@ -173,12 +173,4 @@ func (u *Uploader) upload(path string) error {
 	}
 
 	return nil
-}
-
-// GetEventChan. Получение канала для получения событий
-func (u *Uploader) GetEventChan() chan p.Info {
-
-	u.log.Debug(fmt.Sprintf("[uploader.GetEventChan()];"))
-
-	return u.eventCh
 }
