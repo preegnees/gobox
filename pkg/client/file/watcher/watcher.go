@@ -13,8 +13,8 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/sirupsen/logrus"
 
-	p "github.com/preegnees/gobox/pkg/fileWorker/protocol"
-	u "github.com/preegnees/gobox/pkg/fileWorker/utils"
+	p "github.com/preegnees/gobox/pkg/client/file/protocol"
+	u "github.com/preegnees/gobox/pkg/client/file/utils"
 )
 
 var (

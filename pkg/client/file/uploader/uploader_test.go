@@ -10,8 +10,8 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	protocol "github.com/preegnees/gobox/pkg/fileWorker/protocol"
-	"github.com/preegnees/gobox/pkg/fileWorker/utils"
+	protocol "github.com/preegnees/gobox/pkg/client/file/protocol"
+	"github.com/preegnees/gobox/pkg/client/file/utils"
 )
 
 const PATH = "TestDir"

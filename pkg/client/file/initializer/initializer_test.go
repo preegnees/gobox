@@ -8,9 +8,9 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	p "github.com/preegnees/gobox/pkg/fileWorker/protocol"
-	u "github.com/preegnees/gobox/pkg/fileWorker/uploader"
-	w "github.com/preegnees/gobox/pkg/fileWorker/watcher"
+	p "github.com/preegnees/gobox/pkg/client/file/protocol"
+	u "github.com/preegnees/gobox/pkg/client/file/uploader"
+	w "github.com/preegnees/gobox/pkg/client/file/watcher"
 )
 
 type cli struct {

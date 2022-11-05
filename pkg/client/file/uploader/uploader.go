@@ -11,8 +11,8 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	p "github.com/preegnees/gobox/pkg/fileWorker/protocol"
-	ut "github.com/preegnees/gobox/pkg/fileWorker/utils"
+	p "github.com/preegnees/gobox/pkg/client/file/protocol"
+	ut "github.com/preegnees/gobox/pkg/client/file/utils"
 )
 
 var (
