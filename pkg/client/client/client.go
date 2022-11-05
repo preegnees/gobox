@@ -16,13 +16,13 @@ type IClient interface {
 type client struct{}
 
 func New() (IClient, error) {
-	return client{}, nil
+	return &client{}, nil
 }
 
-func (c client) SendError(indentifier int, ctx context.CancelFunc, err error) {
+func (c *client) SendError(indentifier int, ctx context.CancelFunc, err error) {
 	
 }
 
-func (c client) SendDeviation(info pc.Info) {
+func (c *client) SendDeviation(info pc.Info) {
 	
 }
