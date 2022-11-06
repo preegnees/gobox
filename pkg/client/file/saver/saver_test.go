@@ -3,6 +3,7 @@ package saver
 import (
 	"os"
 	"testing"
+	"time"
 )
 
 var TEST_FILE = "TEST_FILE.txt"
@@ -86,5 +87,42 @@ func TestResizeFile(t *testing.T) {
 
 	if stat.Size() != newSize2 {
 		panic("stat.Size() != newSize1")
+	}
+}
+
+func TestChangeTime(t *testing.T) {
+
+	f, err := os.Create(TEST_FILE)
+	if err != nil {
+		panic(err)
+	}
+	f.Close()
+
+	defer os.Remove(TEST_FILE)
+
+	s := saver{
+		storage: make(map[string]*os.File),
+	}
+
+	file, err := os.OpenFile(TEST_FILE, os.O_RDWR, 0777)
+	if err != nil {
+		panic(err)
+	}
+	defer file.Close()
+	s.storage[TEST_FILE] = file
+
+	newTime := time.Now().UnixMicro()
+
+	if err := s.changeModTime(TEST_FILE, newTime); err != nil {
+		panic(err)
+	}
+
+	stat, err := os.Stat(TEST_FILE)
+	if err != nil {
+		panic(err)
+	}
+
+	if newTime != stat.ModTime().UnixMicro() {
+		panic("newTime != stat.ModTime().UnixMicro()")
 	}
 }

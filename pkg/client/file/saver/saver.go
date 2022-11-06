@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	pc "github.com/preegnees/gobox/pkg/client/file/protocol"
 	"github.com/sirupsen/logrus"
@@ -86,7 +87,12 @@ func (s *saver) Write(info pc.Info) error {
 	return nil
 }
 
-func (s *saver) changeModTime(path string, modTime int) error {
+func (s *saver) changeModTime(path string, modTime int64) error {
+
+	err := os.Chtimes(path, time.UnixMicro(modTime), time.UnixMicro(modTime))
+    if err != nil {
+        return err
+    }
 	return nil
 }
 
