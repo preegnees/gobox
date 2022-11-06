@@ -22,6 +22,8 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// не забыить, что нужно при каждом обращении файала писать полный путь (в клиент приходят относительные пути) 
+
 const PREFFIX = "__gobox__"
 
 var _ ISaver = (*saver)(nil)
@@ -57,6 +59,10 @@ func New(cnf ConfSaver) *saver {
 }
 
 func (s *saver) CreateFolder(path string) error {
+
+	if err := os.MkdirAll(path, 0777); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -80,10 +86,24 @@ func (s *saver) Open(path string) error {
 }
 
 func (s *saver) Close(path string) error {
+
+	f, ok := s.storage[path]
+	if !ok {
+		return errors.New("")
+	}
+	f.Close()
 	return nil
 }
 
 func (s *saver) Write(info pc.Info) error {
+
+	// тут нужно добавить смещенеи файла 
+	f, ok := s.storage[info.Path]
+	if !ok {
+		return errors.New("")
+	}
+
+	n, err := f.WriteAt() // сюда нужно писать пейлоад
 	return nil
 }
 
